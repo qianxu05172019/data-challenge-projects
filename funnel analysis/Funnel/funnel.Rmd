@@ -1,0 +1,101 @@
+---
+title: "Decision Tree Analysis for E-commerce Funnel"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# 设置 CRAN 镜像
+options(repos = c(CRAN = "https://cran.rstudio.com/"))
+
+# 加载必要的包
+install.packages(c("rpart", "rpart.plot", "dplyr", "ggplot2", "readr", "caret"))
+library(rpart)
+library(rpart.plot)
+library(dplyr)
+library(ggplot2)
+library(readr)
+library(caret)
+```
+
+# 数据导入
+```{r data-import}
+user_table <- read_csv("user_table.csv")
+search_page_table <- read_csv("search_page_table.csv")
+payment_page_table <- read_csv("payment_page_table.csv")
+payment_confirmation_table <- read_csv("payment_confirmation_table.csv")
+```
+
+# 数据合并与准备
+```{r data-preparation}
+full_data <- user_table %>%
+  left_join(search_page_table, by = "user_id") %>%
+  mutate(visited_search = ifelse(!is.na(page), 1, 0)) %>%
+  left_join(payment_page_table, by = "user_id") %>%
+  mutate(visited_payment = ifelse(!is.na(page.y), 1, 0)) %>%
+  left_join(payment_confirmation_table, by = "user_id") %>%
+  mutate(confirmed_payment = ifelse(!is.na(page.x), 1, 0)) %>%
+  select(user_id, device, sex, visited_search, visited_payment, confirmed_payment)
+```
+
+# 数据质量检查（QC）
+```{r data-quality}
+summary(full_data)
+
+# 检测和处理缺失值
+full_data <- full_data %>% mutate(across(everything(), ~ifelse(is.na(.), 0, .)))
+```
+
+# 检测极端值
+```{r outlier-detection}
+boxplot(full_data$visited_search, main = "Outliers in Search Visits")
+```
+
+# 创建目标变量
+```{r target-variable}
+full_data <- full_data %>% mutate(target = ifelse(confirmed_payment == 1, "Converted", "NotConverted"))
+```
+
+# 卡方检验进行特征选择
+```{r chi-square-test}
+# 对分类变量进行卡方检验
+chi_results <- full_data %>%
+  select(device, sex, visited_search, visited_payment) %>%
+  summarise(across(everything(), ~chisq.test(table(., full_data$target))$p.value))
+
+# 输出卡方检验结果
+print(chi_results)
+```
+
+# 数据分割
+```{r data-split}
+set.seed(123)
+train_index <- createDataPartition(full_data$target, p = 0.7, list = FALSE)
+train_data <- full_data[train_index, ]
+test_data <- full_data[-train_index, ]
+```
+
+# 构建决策树模型
+```{r decision-tree}
+tree_model <- rpart(target ~ device + sex + visited_search + visited_payment, 
+                    data = train_data, 
+                    method = "class", 
+                    control = rpart.control(minsplit = 20, minbucket = 10, maxdepth = 3))
+```
+
+# 模型评估
+```{r model-evaluation}
+pred <- predict(tree_model, test_data, type = "class")
+confusionMatrix(pred, as.factor(test_data$target))
+```
+
+# 决策树可视化
+```{r tree-visualization}
+rpart.plot(tree_model, main = "Decision Tree", extra = 104)
+```
+
+# 导出决策树结构
+```{r export-tree, include=FALSE}
+sink("tree_structure.txt")
+print(tree_model)
+sink()
+```
